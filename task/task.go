@@ -99,7 +99,7 @@ type Task struct {
 // NewTask returns a new Task struct, and initialize aws ecs API client.
 // If you want to run the task as Fargate, please provide fargate flag to true, and your subnet IDs for awsvpc.
 // If you don't want to run the task as Fargate, please provide empty string for subnetIDs.
-func NewTask(cluster, container, taskDefinitionName, command string, fargate bool, subnetIDs, securityGroupIDs string, timeout time.Duration, profile, region string) (*Task, error) {
+func NewTask(cluster, container, taskDefinitionName, command string, fargate bool, publicIP bool, subnetIDs, securityGroupIDs string, timeout time.Duration, profile, region string) (*Task, error) {
 	if cluster == "" {
 		return nil, errors.New("Cluster name is required")
 	}
@@ -124,11 +124,14 @@ func NewTask(cluster, container, taskDefinitionName, command string, fargate boo
 		cmd = append(cmd, aws.String(c))
 	}
 	launchType := "EC2"
-	assignPublicIP := "DISABLED"
 	if fargate {
 		launchType = "FARGATE"
-		assignPublicIP = "ENABLED"
 	}
+	assignPublicIP := ecs.AssignPublicIpDisabled
+	if publicIP {
+		assignPublicIP = ecs.AssignPublicIpEnabled
+	}
+
 	subnets := []*string{}
 	for _, s := range strings.Split(subnetIDs, ",") {
 		if len(s) > 0 {
@@ -261,12 +264,14 @@ retry:
 		}
 
 		for _, task := range resp.Tasks {
-			taskStoppedReason, containerStoppedReason, err := t.stoppedReasons(task)
+			taskStoppedReason, containerReason, err := t.stoppedReasons(task)
 			if err != nil {
 				return err
 			}
-			return errors.Errorf("Task stopped with reason \"%s\"; container stopped with reason \"%s\"",
-				taskStoppedReason, containerStoppedReason)
+			if taskStoppedReason != "" {
+				return errors.Errorf("Task stopped with reason \"%s\"; container stopped with reason \"%s\"",
+					taskStoppedReason, containerReason)
+			}
 		}
 		return nil
 	}
@@ -279,7 +284,7 @@ func (t *Task) checkTaskStopped(task *ecs.Task) bool {
 	return true
 }
 
-func (t *Task) stoppedReasons(task *ecs.Task) (taskStoppedReason string, containerStoppedReason string, err error) {
+func (t *Task) stoppedReasons(task *ecs.Task) (taskStoppedReason string, containerReason string, err error) {
 	if aws.StringValue(task.StopCode) == ecs.TaskStopCodeTaskFailedToStart {
 		taskStoppedReason = *task.StoppedReason
 	}
@@ -295,6 +300,6 @@ func (t *Task) stoppedReasons(task *ecs.Task) (taskStoppedReason string, contain
 		return "", "", errors.New("cannot find target container")
 	}
 
-	containerStoppedReason = aws.StringValue(targetContainer.Reason)
+	containerReason = aws.StringValue(targetContainer.Reason)
 	return
 }
