@@ -261,13 +261,12 @@ retry:
 		}
 
 		for _, task := range resp.Tasks {
-			code, result, err := t.checkTaskSucceeded(task)
+			taskStoppedReason, containerStoppedReason, err := t.stoppedReasons(task)
 			if err != nil {
-				continue retry
+				return err
 			}
-			if !result {
-				return errors.Errorf("exit code: %v", code)
-			}
+			return errors.Errorf("Task stopped with reason \"%s\"; container stopped with reason \"%s\"",
+				taskStoppedReason, containerStoppedReason)
 		}
 		return nil
 	}
@@ -280,22 +279,22 @@ func (t *Task) checkTaskStopped(task *ecs.Task) bool {
 	return true
 }
 
-func (t *Task) checkTaskSucceeded(task *ecs.Task) (int64, bool, error) {
+func (t *Task) stoppedReasons(task *ecs.Task) (taskStoppedReason string, containerStoppedReason string, err error) {
+	if aws.StringValue(task.StopCode) == ecs.TaskStopCodeTaskFailedToStart {
+		taskStoppedReason = *task.StoppedReason
+	}
+
 	var targetContainer *ecs.Container
 	for _, c := range task.Containers {
 		if *c.Name == t.Container {
 			targetContainer = c
 		}
 	}
+
 	if targetContainer == nil {
-		return int64(1), false, errors.New("can not find target container")
+		return "", "", errors.New("cannot find target container")
 	}
 
-	if targetContainer.ExitCode == nil {
-		return int64(1), false, errors.New("can not read exit code")
-	}
-	if *targetContainer.ExitCode != int64(0) {
-		return *targetContainer.ExitCode, false, nil
-	}
-	return int64(0), true, nil
+	containerStoppedReason = aws.StringValue(targetContainer.Reason)
+	return
 }
